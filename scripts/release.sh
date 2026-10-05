@@ -84,7 +84,10 @@ gh auth status >/dev/null 2>&1 || die "'gh' not authenticated. Run: gh auth logi
 command -v xcodebuild >/dev/null 2>&1 || die "'xcodebuild' not found"
 command -v uv >/dev/null 2>&1 || die "'uv' not found. Install: brew install uv"
 command -v shasum >/dev/null 2>&1 || die "'shasum' not found"
-security find-identity -v -p codesigning | grep -qF "\"$SIGNING_IDENTITY\"" \
+# Output is captured before matching: with pipefail, `grep -q` exiting early would SIGPIPE the producer
+# and fail the pipeline even on a match.
+IDENTITIES="$(security find-identity -v -p codesigning)"
+grep -qF "\"$SIGNING_IDENTITY\"" <<< "$IDENTITIES" \
     || die "Signing identity not found in the keychain: $SIGNING_IDENTITY"
 xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
     || die "notarytool keychain profile '$NOTARY_PROFILE' does not work. Create it: xcrun notarytool store-credentials $NOTARY_PROFILE"
@@ -163,7 +166,8 @@ echo "Build complete: $BINARY"
 echo "Signing binary with $SIGNING_IDENTITY..."
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BINARY"
 codesign --verify --strict --verbose=1 "$BINARY" || die "Signature verification failed"
-codesign --display --verbose=2 "$BINARY" 2>&1 | grep -qF "Authority=$SIGNING_IDENTITY" \
+SIGNATURE_DETAILS="$(codesign --display --verbose=2 "$BINARY" 2>&1)"
+grep -qF "Authority=$SIGNING_IDENTITY" <<< "$SIGNATURE_DETAILS" \
     || die "Binary is not signed by $SIGNING_IDENTITY"
 
 # --- Notarize ---
