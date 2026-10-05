@@ -7,9 +7,16 @@ PYPROJECT_FILE="$REPO_ROOT/python/pyproject.toml"
 PROJECT="$REPO_ROOT/appstore.xcodeproj"
 DERIVED_DATA="$REPO_ROOT/.build/release"
 PRODUCT_NAME="appstore"
+# Developer ID signing + notarization, so downloaded binaries pass Gatekeeper and keep working after
+# the signing certificate expires (an ad-hoc or Apple Development signature is rejected or killed).
+SIGNING_IDENTITY="${SIGNING_IDENTITY:-Developer ID Application: Nuclear Cyborg Corp (P8MA38JTXY)}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-ncc-cli-notarytool}"
 
 # Track files to clean up on exit (success or failure)
 CLEANUP_FILES=()
+# Copies of the version files, restored if the release fails before the version bump is committed.
+VERSION_BACKUP_DIR=""
+VERSION_COMMITTED=0
 
 safe_rmrf() {
     local dir="$1"
@@ -33,6 +40,11 @@ safe_rmrf() {
 }
 
 cleanup() {
+    if [[ -n "$VERSION_BACKUP_DIR" && "$VERSION_COMMITTED" -eq 0 ]]; then
+        echo "Release did not complete; restoring version files." >&2
+        cp "$VERSION_BACKUP_DIR/main.swift" "$VERSION_FILE"
+        cp "$VERSION_BACKUP_DIR/pyproject.toml" "$PYPROJECT_FILE"
+    fi
     for f in "${CLEANUP_FILES[@]}"; do
         if [[ -f "$f" ]]; then
             rm -f "$f"
@@ -72,6 +84,10 @@ gh auth status >/dev/null 2>&1 || die "'gh' not authenticated. Run: gh auth logi
 command -v xcodebuild >/dev/null 2>&1 || die "'xcodebuild' not found"
 command -v uv >/dev/null 2>&1 || die "'uv' not found. Install: brew install uv"
 command -v shasum >/dev/null 2>&1 || die "'shasum' not found"
+security find-identity -v -p codesigning | grep -qF "\"$SIGNING_IDENTITY\"" \
+    || die "Signing identity not found in the keychain: $SIGNING_IDENTITY"
+xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
+    || die "notarytool keychain profile '$NOTARY_PROFILE' does not work. Create it: xcrun notarytool store-credentials $NOTARY_PROFILE"
 
 # Check for PyPI credentials before starting
 if [[ -z "${UV_PUBLISH_TOKEN:-}" ]] && [[ ! -f "$HOME/.pypirc" ]]; then
@@ -113,6 +129,11 @@ echo ""
 
 # --- Update version in source files ---
 
+VERSION_BACKUP_DIR="$(mktemp -d)"
+CLEANUP_FILES+=("$VERSION_BACKUP_DIR")
+cp "$VERSION_FILE" "$VERSION_BACKUP_DIR/main.swift"
+cp "$PYPROJECT_FILE" "$VERSION_BACKUP_DIR/pyproject.toml"
+
 echo "Updating version in $VERSION_FILE..."
 sed -i '' "s|^let appVersion = \".*\"|let appVersion = \"$VERSION\"|" "$VERSION_FILE"
 
@@ -137,10 +158,34 @@ BINARY="$DERIVED_DATA/Build/Products/Release/$PRODUCT_NAME"
 
 echo "Build complete: $BINARY"
 
-# --- Sign with hardened runtime ---
+# --- Sign: Developer ID, hardened runtime, secure timestamp ---
 
-echo "Signing binary with hardened runtime..."
-codesign --force --sign - --options runtime "$BINARY"
+echo "Signing binary with $SIGNING_IDENTITY..."
+codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BINARY"
+codesign --verify --strict --verbose=1 "$BINARY" || die "Signature verification failed"
+codesign --display --verbose=2 "$BINARY" 2>&1 | grep -qF "Authority=$SIGNING_IDENTITY" \
+    || die "Binary is not signed by $SIGNING_IDENTITY"
+
+# --- Notarize ---
+
+echo "Submitting to Apple for notarization (this can take a few minutes)..."
+NOTARY_ZIP="$(mktemp -d)/$PRODUCT_NAME.zip"
+CLEANUP_FILES+=("$(dirname "$NOTARY_ZIP")")
+ditto -c -k --keepParent "$BINARY" "$NOTARY_ZIP"
+NOTARY_JSON="$(dirname "$NOTARY_ZIP")/result.json"
+xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json > "$NOTARY_JSON" \
+    || die "notarytool submit failed: $(cat "$NOTARY_JSON")"
+# `notarytool submit --wait` exits 0 when the *submission* worked, even if Apple rejected the binary;
+# only the reported status says whether it was accepted.
+NOTARY_STATUS="$(plutil -extract status raw -o - "$NOTARY_JSON" 2>/dev/null || echo unknown)"
+NOTARY_ID="$(plutil -extract id raw -o - "$NOTARY_JSON" 2>/dev/null || echo unknown)"
+if [[ "$NOTARY_STATUS" != "Accepted" ]]; then
+    echo "Notarization status: $NOTARY_STATUS (submission $NOTARY_ID). Apple's log:" >&2
+    xcrun notarytool log "$NOTARY_ID" --keychain-profile "$NOTARY_PROFILE" 2>&1 | head -60 >&2
+    die "Notarization was not accepted"
+fi
+echo "Notarized (submission $NOTARY_ID)."
+# A bare Mach-O cannot have a ticket stapled; Gatekeeper checks the notarization online on first run.
 
 # --- Archive ---
 
@@ -167,6 +212,7 @@ echo ""
 echo "Committing version bump..."
 git add "$VERSION_FILE" "$PYPROJECT_FILE"
 git commit -m "Release v$VERSION"
+VERSION_COMMITTED=1
 git tag -a "v$VERSION" -m "Release v$VERSION"
 
 # --- Push ---
