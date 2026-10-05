@@ -216,7 +216,7 @@ private func handleToolCall(_ params: CallTool.Parameters) async throws -> CallT
 
     switch params.name {
     case "version":
-        return CallTool.Result(content: [.text(appVersion)])
+        return CallTool.Result(content: [.text(text: appVersion, annotations: nil, _meta: nil)])
     case "search_apps":
         return try await handleSearchApps(args)
     case "search_ranked":
@@ -247,14 +247,14 @@ private func handleToolCall(_ params: CallTool.Parameters) async throws -> CallT
 private func jsonResult(_ value: Any) throws -> CallTool.Result {
     let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
     let text = String(data: data, encoding: .utf8) ?? "{}"
-    return CallTool.Result(content: [.text(text)])
+    return CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)])
 }
 
 private func encodableResult<T: Encodable>(_ value: T) throws -> CallTool.Result {
     let encoder = JSONEncoder()
     let data = try encoder.encode(value)
     let text = String(data: data, encoding: .utf8) ?? "{}"
-    return CallTool.Result(content: [.text(text)])
+    return CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)])
 }
 
 private func errorResult(_ message: String) -> CallTool.Result {
@@ -262,10 +262,10 @@ private func errorResult(_ message: String) -> CallTool.Result {
     do {
         let data = try JSONSerialization.data(withJSONObject: errorDict)
         let json = String(data: data, encoding: .utf8) ?? "{\"error\":\"Encoding error\"}"
-        return CallTool.Result(content: [.text(json)], isError: true)
+        return CallTool.Result(content: [.text(text: json, annotations: nil, _meta: nil)], isError: true)
     } catch {
         // Serializing a [String: String] dict cannot fail, but handle it anyway
-        return CallTool.Result(content: [.text("{\"error\":\"Internal serialization error\"}")], isError: true)
+        return CallTool.Result(content: [.text(text: "{\"error\":\"Internal serialization error\"}", annotations: nil, _meta: nil)], isError: true)
     }
 }
 

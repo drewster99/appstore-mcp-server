@@ -55,8 +55,8 @@ func registerPromptHandlers(on server: Server) async {
 // MARK: - Prompt Builders
 
 private func competitiveAnalysisPrompt(params: GetPrompt.Parameters) -> GetPrompt.Result {
-    let target = params.arguments?["keyword_or_app_id"]?.stringValue ?? "the target app"
-    let storefront = params.arguments?["storefront"]?.stringValue ?? "US"
+    let target = params.arguments?["keyword_or_app_id"] ?? "the target app"
+    let storefront = params.arguments?["storefront"] ?? "US"
 
     let message = """
     Perform a competitive analysis for "\(target)" on the \(storefront) App Store. Follow these steps:
@@ -89,8 +89,8 @@ private func competitiveAnalysisPrompt(params: GetPrompt.Parameters) -> GetPromp
 }
 
 private func marketResearchPrompt(params: GetPrompt.Parameters) -> GetPrompt.Result {
-    let category = params.arguments?["category"]?.stringValue ?? "the target category"
-    let storefront = params.arguments?["storefront"]?.stringValue ?? "US"
+    let category = params.arguments?["category"] ?? "the target category"
+    let storefront = params.arguments?["storefront"] ?? "US"
 
     let message = """
     Research the "\(category)" market segment on the \(storefront) App Store. Follow these steps:
